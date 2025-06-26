@@ -818,13 +818,28 @@ async def analyze_image(
         logger.error(f"Image analysis error: {str(e)}")
         return {"error": f"Failed to analyze image: {str(e)}", "success": False}
 
-@app.post("/image-generation", response_model=ImageResponse)
+import base64
+import httpx
+import urllib.parse
+from fastapi import Depends
+from pydantic import BaseModel
+from typing import Optional
+
+# If not already present
+from fastapi import APIRouter
+router = APIRouter()
+
+# Optional: Move to separate file
+async def check_rate_limit():
+    return await rate_limiter.check("image")
+
+@router.post("/image-generation", response_model=ImageResponse)
 async def generate_image(
     request: ImageGenerationRequest,
-    _: bool = Depends(lambda: rate_limiter.check("image"))
+    _: bool = Depends(check_rate_limit)
 ):
     """
-    Generate an image using dynamic prompt enhancement (photoreal default).
+    Generate an image using Hello-Kaiiddo's API with smart photorealism enhancement.
     """
     try:
         raw_prompt = request.prompt
@@ -833,73 +848,65 @@ async def generate_image(
         if not raw_prompt:
             return {"error": "Prompt is required for image generation", "success": False}
 
-        # --- 🔥 Smart Prompt Injector ---
+        # 🔥 Smart Prompt Enhancer
         def enhance_prompt(user_prompt: str) -> str:
-            # Check for keywords that imply non-photorealistic styles
             stylized_keywords = [
                 "anime", "cartoon", "ghibli", "pixar", "digital art",
                 "3d render", "low poly", "illustration", "manga", "sketch",
                 "painting", "comic", "vector", "isometric"
             ]
             if any(word.lower() in user_prompt.lower() for word in stylized_keywords):
-                return user_prompt  # Skip enhancement if style is explicitly non-photo
-
-            # Otherwise, enhance for ultra photorealistic
+                return user_prompt
             additions = [
                 "photorealistic", "ultra-realistic", "high resolution", "DSLR",
-                "4K", "cinematic lighting", "sharp focus", "depth of field", 
+                "4K", "cinematic lighting", "sharp focus", "depth of field",
                 "HDR", "natural colors", "trending on ArtStation"
             ]
             return f"{user_prompt}, {', '.join(additions)}"
 
-        # Apply injection
+        # Enhance and encode prompt
         prompt = enhance_prompt(raw_prompt)
-
-        # Truncate long prompts if needed
         if len(prompt) > 500:
             prompt = prompt[:500]
+        encoded_prompt = urllib.parse.quote_plus(prompt)
 
-        # URL encode the prompt for the new API
-        from urllib.parse import quote
-        encoded_prompt = quote(prompt)
-
-        # Build the new API URL with parameters
+        # Set API query parameters
         api_params = {
-            'model': 'Flux',
-            'width': getattr(request, 'width', 512),  # Default to 512 if not provided
-            'height': getattr(request, 'height', 512),  # Default to 512 if not provided
-            'steps': getattr(request, 'steps', 25),    # Default to 25 if not provided
-            'guidance': getattr(request, 'guidance', 7),  # Default to 7 if not provided
-            'enhance': 'true',  # Always use enhance for better quality
-            'safe': 'true'      # Always use safe mode
+            "model": "Flux",
+            "width": str(request.width),
+            "height": str(request.height),
+            "steps": str(request.steps),
+            "guidance": str(request.guidance),
+            "enhance": "true",
+            "safe": "false"
         }
 
-        # Construct the API URL
+        # Build final URL
         base_url = f"https://image.hello-kaiiddo.workers.dev/{encoded_prompt}"
-        query_string = "&".join([f"{key}={value}" for key, value in api_params.items()])
+        query_string = httpx.QueryParams(api_params).render()
         api_url = f"{base_url}?{query_string}"
 
         async with httpx.AsyncClient() as client:
-            response = await client.get(
-                api_url,
-                timeout=300  # Increased timeout for image generation
-            )
+            logger.info(f"Calling image API: {api_url}")
+            response = await client.get(api_url, timeout=240)
+
+            logger.info(f"API Response Status: {response.status_code}")
+            if response.status_code != 200:
+                logger.error(f"API Response Body: {response.text}")
             response.raise_for_status()
 
-            # The new API returns the image directly as bytes
             image_bytes = response.content
             encoded_image = base64.b64encode(image_bytes).decode("utf-8")
 
             logger.info(f"Generated image for prompt: {prompt[:60]}...")
 
-            # Maintain session functionality
             if user_id and user_id in sessions:
                 sessions[user_id].append({
-                    "role": "user", 
+                    "role": "user",
                     "content": f"[IMAGE GENERATION REQUEST]: {raw_prompt}"
                 })
                 sessions[user_id].append({
-                    "role": "assistant", 
+                    "role": "assistant",
                     "content": f"[IMAGE GENERATION RESULT]: Image based on: \"{raw_prompt}\""
                 })
                 if len(sessions[user_id]) > MAX_SESSION_LENGTH:
