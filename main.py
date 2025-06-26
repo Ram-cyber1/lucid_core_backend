@@ -818,27 +818,8 @@ async def analyze_image(
         logger.error(f"Image analysis error: {str(e)}")
         return {"error": f"Failed to analyze image: {str(e)}", "success": False}
 
-import base64
-import httpx
-import urllib.parse
-import asyncio
-from fastapi import FastAPI, Depends
-from pydantic import BaseModel
-from typing import Optional
 
-app = FastAPI()
-
-# Dummy safe fallback values
-async def check_rate_limit():
-    return True
-
-import logging
-logger = logging.getLogger("uvicorn")
-
-sessions = {}
-MAX_SESSION_LENGTH = 50
-
-# Request & Response models
+# --- Image Generation Models (separate from existing ones) ---
 class ImageGenerationRequest(BaseModel):
     prompt: str
     user_id: str
@@ -852,11 +833,12 @@ class ImageResponse(BaseModel):
     format: str
     prompt: str
     success: bool
+    error: Optional[str] = None
 
 @app.post("/image-generation", response_model=ImageResponse)
 async def generate_image(
     request: ImageGenerationRequest,
-    _: bool = Depends(check_rate_limit)
+    _: bool = Depends(lambda: rate_limiter.check("image-generation"))
 ):
     """
     Generate an image using Hello-Kaiiddo's API with smart photorealism enhancement.
@@ -866,7 +848,13 @@ async def generate_image(
         user_id = request.user_id
 
         if not raw_prompt:
-            return {"error": "Prompt is required for image generation", "success": False}
+            return ImageResponse(
+                image="",
+                format="",
+                prompt="",
+                success=False,
+                error="Prompt is required for image generation"
+            )
 
         # 🔥 Smart Prompt Enhancer
         def enhance_prompt(user_prompt: str) -> str:
@@ -901,7 +889,6 @@ async def generate_image(
             "safe": "false"
         }
 
-        # ✅ FIXED: use urllib.parse.urlencode instead of .render()
         query_string = urllib.parse.urlencode(api_params)
         api_url = f"https://image.hello-kaiiddo.workers.dev/{encoded_prompt}?{query_string}"
 
@@ -912,7 +899,13 @@ async def generate_image(
             logger.info(f"API Response Status: {response.status_code}")
             if response.status_code != 200:
                 logger.error(f"API Response Body: {response.text}")
-                response.raise_for_status()
+                return ImageResponse(
+                    image="",
+                    format="",
+                    prompt=raw_prompt,
+                    success=False,
+                    error=f"API returned status {response.status_code}"
+                )
 
             image_bytes = response.content
             encoded_image = base64.b64encode(image_bytes).decode("utf-8")
@@ -921,7 +914,9 @@ async def generate_image(
 
             # Save to session context
             if user_id:
-                sessions.setdefault(user_id, []).append({
+                if user_id not in sessions:
+                    sessions[user_id] = []
+                sessions[user_id].append({
                     "role": "user",
                     "content": f"[IMAGE GENERATION REQUEST]: {raw_prompt}"
                 })
@@ -932,29 +927,31 @@ async def generate_image(
                 if len(sessions[user_id]) > MAX_SESSION_LENGTH:
                     sessions[user_id] = sessions[user_id][-MAX_SESSION_LENGTH:]
 
-            return {
-                "image": encoded_image,
-                "format": "base64",
-                "prompt": prompt,
-                "success": True
-            }
+            return ImageResponse(
+                image=encoded_image,
+                format="base64",
+                prompt=prompt,
+                success=True
+            )
 
     except httpx.HTTPStatusError as e:
         logger.error(f"Image generation HTTP error: {str(e)}")
-        return {
-            "image": "",
-            "format": "",
-            "prompt": raw_prompt,
-            "success": False
-        }
+        return ImageResponse(
+            image="",
+            format="",
+            prompt=raw_prompt if 'raw_prompt' in locals() else "",
+            success=False,
+            error=f"HTTP error: {str(e)}"
+        )
     except Exception as e:
         logger.error(f"Image generation error: {str(e)}")
-        return {
-            "image": "",
-            "format": "",
-            "prompt": raw_prompt if 'raw_prompt' in locals() else "",
-            "success": False
-        }
+        return ImageResponse(
+            image="",
+            format="",
+            prompt=raw_prompt if 'raw_prompt' in locals() else "",
+            success=False,
+            error=f"Failed to generate image: {str(e)}"
+        )
 
 
 @app.post("/image-ocr", response_model=ImageOCRResponse)
