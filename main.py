@@ -828,7 +828,7 @@ from typing import Optional
 
 app = FastAPI()
 
-# Safe dummy replacements
+# Dummy safe fallback values
 async def check_rate_limit():
     return True
 
@@ -852,10 +852,6 @@ class ImageResponse(BaseModel):
     format: str
     prompt: str
     success: bool
-
-# Async rate limiter wrapper
-async def check_rate_limit():
-    return await rate_limiter.check("image")
 
 @app.post("/image-generation", response_model=ImageResponse)
 async def generate_image(
@@ -905,10 +901,9 @@ async def generate_image(
             "safe": "false"
         }
 
-        # Build final URL
-        base_url = f"https://image.hello-kaiiddo.workers.dev/{encoded_prompt}"
-        query_string = httpx.QueryParams(api_params).render()
-        api_url = f"{base_url}?{query_string}"
+        # ✅ FIXED: use urllib.parse.urlencode instead of .render()
+        query_string = urllib.parse.urlencode(api_params)
+        api_url = f"https://image.hello-kaiiddo.workers.dev/{encoded_prompt}?{query_string}"
 
         async with httpx.AsyncClient() as client:
             logger.info(f"Calling image API: {api_url}")
@@ -917,7 +912,7 @@ async def generate_image(
             logger.info(f"API Response Status: {response.status_code}")
             if response.status_code != 200:
                 logger.error(f"API Response Body: {response.text}")
-            response.raise_for_status()
+                response.raise_for_status()
 
             image_bytes = response.content
             encoded_image = base64.b64encode(image_bytes).decode("utf-8")
@@ -925,8 +920,8 @@ async def generate_image(
             logger.info(f"Generated image for prompt: {prompt[:60]}...")
 
             # Save to session context
-            if user_id and user_id in sessions:
-                sessions[user_id].append({
+            if user_id:
+                sessions.setdefault(user_id, []).append({
                     "role": "user",
                     "content": f"[IMAGE GENERATION REQUEST]: {raw_prompt}"
                 })
@@ -937,8 +932,6 @@ async def generate_image(
                 if len(sessions[user_id]) > MAX_SESSION_LENGTH:
                     sessions[user_id] = sessions[user_id][-MAX_SESSION_LENGTH:]
 
-                logger.info(f"[{user_id}] Added image generation to chat context")
-
             return {
                 "image": encoded_image,
                 "format": "base64",
@@ -948,11 +941,20 @@ async def generate_image(
 
     except httpx.HTTPStatusError as e:
         logger.error(f"Image generation HTTP error: {str(e)}")
-        return {"error": f"API error: {e.response.status_code}", "success": False}
+        return {
+            "image": "",
+            "format": "",
+            "prompt": raw_prompt,
+            "success": False
+        }
     except Exception as e:
         logger.error(f"Image generation error: {str(e)}")
-        return {"error": f"Failed to generate image: {str(e)}", "success": False}
-
+        return {
+            "image": "",
+            "format": "",
+            "prompt": raw_prompt if 'raw_prompt' in locals() else "",
+            "success": False
+        }
 
 
 @app.post("/image-ocr", response_model=ImageOCRResponse)
