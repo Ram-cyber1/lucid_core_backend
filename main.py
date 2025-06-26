@@ -828,12 +828,15 @@ from typing import Optional
 
 app = FastAPI()
 
-# Dummy placeholders if not already defined
-# Replace these with actual implementations if used elsewhere
-rate_limiter = ...  # Your existing rate limiter object
-logger = ...         # Your logger (e.g. logging.getLogger("uvicorn"))
-sessions = {}        # Your session context dict
-MAX_SESSION_LENGTH = 50  # Adjust as needed
+# Safe dummy replacements
+async def check_rate_limit():
+    return True
+
+import logging
+logger = logging.getLogger("uvicorn")
+
+sessions = {}
+MAX_SESSION_LENGTH = 50
 
 # Request & Response models
 class ImageGenerationRequest(BaseModel):
