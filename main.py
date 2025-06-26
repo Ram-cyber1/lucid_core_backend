@@ -821,15 +821,36 @@ async def analyze_image(
 import base64
 import httpx
 import urllib.parse
-from fastapi import Depends
+import asyncio
+from fastapi import FastAPI, Depends
 from pydantic import BaseModel
 from typing import Optional
 
-# If not already present
-from fastapi import APIRouter
-router = APIRouter()
+app = FastAPI()
 
-# Optional: Move to separate file
+# Dummy placeholders if not already defined
+# Replace these with actual implementations if used elsewhere
+rate_limiter = ...  # Your existing rate limiter object
+logger = ...         # Your logger (e.g. logging.getLogger("uvicorn"))
+sessions = {}        # Your session context dict
+MAX_SESSION_LENGTH = 50  # Adjust as needed
+
+# Request & Response models
+class ImageGenerationRequest(BaseModel):
+    prompt: str
+    user_id: str
+    width: Optional[int] = 512
+    height: Optional[int] = 512
+    steps: Optional[int] = 25
+    guidance: Optional[int] = 7
+
+class ImageResponse(BaseModel):
+    image: str
+    format: str
+    prompt: str
+    success: bool
+
+# Async rate limiter wrapper
 async def check_rate_limit():
     return await rate_limiter.check("image")
 
@@ -900,6 +921,7 @@ async def generate_image(
 
             logger.info(f"Generated image for prompt: {prompt[:60]}...")
 
+            # Save to session context
             if user_id and user_id in sessions:
                 sessions[user_id].append({
                     "role": "user",
@@ -927,6 +949,7 @@ async def generate_image(
     except Exception as e:
         logger.error(f"Image generation error: {str(e)}")
         return {"error": f"Failed to generate image: {str(e)}", "success": False}
+
 
 
 @app.post("/image-ocr", response_model=ImageOCRResponse)
