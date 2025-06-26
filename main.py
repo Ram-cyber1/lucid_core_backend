@@ -833,7 +833,7 @@ router = APIRouter()
 async def check_rate_limit():
     return await rate_limiter.check("image")
 
-@router.post("/image-generation", response_model=ImageResponse)
+@app.post("/image-generation", response_model=ImageResponse)
 async def generate_image(
     request: ImageGenerationRequest,
     _: bool = Depends(check_rate_limit)
